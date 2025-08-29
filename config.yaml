@@ -1,0 +1,11 @@
+server:
+  http_address: ":8080"
+  rpc_address: ":9090"
+
+database:
+  postgres:
+    host: "localhost"
+    port: 5432
+    user: "gameuser"
+    password: "gamepassword"
+    dbname: "gamedb"
