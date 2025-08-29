@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/wfunc/gameserver/logger"
@@ -23,6 +24,7 @@ type GamingState struct {
 	GameData      interface{}
 	Results       map[string]interface{}
 	TimerID       int64
+	dataMutex     sync.RWMutex // Mutex to protect GameData and Results
 }
 
 // NewGamingState 创建新的游戏状态
@@ -69,7 +71,9 @@ func (s *GamingState) OnExit() {
 
 // OnUpdate 游戏状态更新
 func (s *GamingState) OnUpdate() {
-	// This is a simple tick-based update. For real-time games, you might want a more sophisticated loop.
+	s.dataMutex.Lock()
+	defer s.dataMutex.Unlock()
+
 	s.RemainingTime -= 100 * time.Millisecond
 	if s.RemainingTime <= 0 {
 		s.endGame()
@@ -83,6 +87,9 @@ func (s *GamingState) GetID() string {
 }
 
 func (s *GamingState) initializeGameData() {
+	s.dataMutex.Lock()
+	defer s.dataMutex.Unlock()
+
 	switch s.Room.GetGameType() {
 	case "slot_machine":
 		s.GameData = s.initializeSlotMachineData()
@@ -93,57 +100,67 @@ func (s *GamingState) initializeGameData() {
 
 func (s *GamingState) initializeSlotMachineData() map[string]interface{} {
 	return map[string]interface{}{
-		"reels":      [3]int{0, 0, 0},
-		"spin_count": 0,
+		"reels":       [3]int{0, 0, 0},
+		"spin_count":  0,
+		"last_result": nil,
 	}
 }
 
 func (s *GamingState) notifyGameStart() {
-	startMsg := map[string]interface{}{
-		"game_data": s.GameData,
+	s.dataMutex.RLock()
+	defer s.dataMutex.RUnlock()
+
+	logger.Log.Debugf("Data before marshal in notifyGameStart: %+v", s.GameData)
+	data, err := json.Marshal(s.GameData)
+	if err != nil {
+		logger.Log.Errorf("Failed to marshal game start data: %v", err)
+		return
 	}
-	data, _ := json.Marshal(startMsg)
+	logger.Log.Infof("Broadcasting GameStart with data: %s", string(data))
 	s.Room.Broadcast(network.MsgTypeGameStart, data)
 }
 
 func (s *GamingState) updateSlotMachineLogic(player Player) {
+	s.dataMutex.Lock()
+	defer s.dataMutex.Unlock()
+
 	gameData, ok := s.GameData.(map[string]interface{})
 	if !ok {
 		return
 	}
 
-	// Simulate spinning the reels
 	reels := [3]int{rand.Intn(8), rand.Intn(8), rand.Intn(8)}
 	gameData["reels"] = reels
 	gameData["spin_count"] = gameData["spin_count"].(int) + 1
 
-	// Calculate the result of this spin
 	result := s.calculateSlotResult(reels)
 	gameData["last_result"] = result
 
 	s.GameData = gameData
 
-	// Immediately sync the new state to all players
 	s.syncGameState()
 }
 
 func (s *GamingState) syncGameState() {
+	// This function is called from within updateSlotMachineLogic, which already holds the lock.
+	logger.Log.Debugf("Data before marshal in syncGameState: %+v", s.GameData)
 	data, err := json.Marshal(s.GameData)
 	if err != nil {
 		logger.Log.Errorf("Error marshalling sync message: %v", err)
 		return
 	}
+	logger.Log.Infof("Broadcasting GameSync with data: %s", string(data))
 	s.Room.Broadcast(network.MsgTypeGameSync, data)
 }
 
 func (s *GamingState) endGame() {
+	// This function is called from OnUpdate, which already holds the lock.
 	logger.Log.Infof("房间 %s 游戏结束", s.Room.GetID())
 	s.calculateFinalResults()
 	s.notifyGameEnd()
 
-	// TODO: Transition to a SettlementState
-	// settlementState := NewSettlementState(s.Room, s.Results)
-	// s.Room.ChangeState(settlementState)
+	waitingState := NewWaitingState(s.Room)
+	s.Room.ChangeState(waitingState)
 }
 
 func (s *GamingState) calculateFinalResults() {
@@ -154,17 +171,37 @@ func (s *GamingState) calculateFinalResults() {
 }
 
 func (s *GamingState) calculateSlotMachineResults() map[string]interface{} {
-	// For a slot machine, the result is per-spin, but we could have a final tally.
-	// This is just a placeholder.
-	return map[string]interface{}{"final_payout": 0}
+	gameData, ok := s.GameData.(map[string]interface{})
+	if !ok {
+		return map[string]interface{}{"error": "invalid game data"}
+	}
+
+	finalResult := map[string]interface{}{
+		"final_spin_count": gameData["spin_count"],
+		"last_win":         nil,
+	}
+
+	if lastResult, ok := gameData["last_result"].(map[string]interface{}); ok {
+		finalResult["last_win"] = lastResult["win"]
+	}
+
+	return finalResult
 }
 
 func (s *GamingState) notifyGameEnd() {
-	data, _ := json.Marshal(s.Results)
+	logger.Log.Debugf("Data before marshal in notifyGameEnd: %+v", s.Results)
+	data, err := json.Marshal(s.Results)
+	if err != nil {
+		logger.Log.Errorf("Failed to marshal game end data: %v", err)
+		return
+	}
+	logger.Log.Infof("Broadcasting GameEnd with data: %s", string(data))
 	s.Room.Broadcast(network.MsgTypeGameEnd, data)
 }
 
 func (s *GamingState) cleanupGameData() {
+	s.dataMutex.Lock()
+	defer s.dataMutex.Unlock()
 	s.GameData = nil
 	s.Results = nil
 }

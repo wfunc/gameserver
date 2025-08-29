@@ -133,7 +133,7 @@ func (s *GameServer) handlePacket(sess *session.Session, packet *network.Packet)
 
 func (s *GameServer) handleCreateRoom(session *session.Session, packet *network.Packet) {
 	roomID := uuid.New().String()
-	room := s.roomManager.CreateRoom(roomID, "New Room", "default_game", 4, s.broadcaster)
+	room := s.roomManager.CreateRoom(roomID, "New Room", "slot_machine", 4, s.broadcaster)
 	room.AddPlayer(session)
 
 	logger.Log.Infof("Session %s created room %s", session.GetID(), roomID)

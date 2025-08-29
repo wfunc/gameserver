@@ -7,7 +7,7 @@ import (
 var Log *zap.SugaredLogger
 
 func Init() {
-	logger, err := zap.NewProduction()
+	logger, err := zap.NewDevelopment() // Use Development logger for more verbose output
 	if err != nil {
 		panic("failed to initialize zap logger: " + err.Error())
 	}

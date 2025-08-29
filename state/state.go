@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/wfunc/gameserver/logger"
 )
 
 // 状态机接口
@@ -136,13 +138,30 @@ func (s *WaitingState) OnUpdate() {
 	s.timer--
 	if s.timer <= 0 {
 		// 切换到游戏状态
-		gamingState := NewGamingState(s.Room, 30*time.Second) // 假设游戏时长30秒
+		gamingState := NewGamingState(s.Room, 5*time.Second) // 假设游戏时长30秒
 		s.Room.ChangeState(gamingState)
 	}
 
 	// 如果房间已满，立即开始游戏
 	if len(s.Room.GetPlayers()) >= s.Room.GetMaxPlayers() {
-		gamingState := NewGamingState(s.Room, 30*time.Second) // 假设游戏时长30秒
+		gamingState := NewGamingState(s.Room, 5*time.Second) // 假设游戏时长5秒
 		s.Room.ChangeState(gamingState)
 	}
+}
+
+// HandleAction 处理玩家在等待状态的动作
+func (s *WaitingState) HandleAction(player Player, actionData []byte) error {
+	logger.Log.Infof("WaitingState received action from player %s, transitioning to GamingState", player.GetID())
+	
+	// 当玩家发送游戏动作时，立即开始游戏
+	// 这解决了玩家在等待期间发送动作被忽略的问题
+	gamingState := NewGamingState(s.Room, 5*time.Second)
+	if err := s.Room.ChangeState(gamingState); err != nil {
+		logger.Log.Errorf("Failed to change state to GamingState: %v", err)
+		return err
+	}
+	
+	logger.Log.Info("Successfully transitioned to GamingState, forwarding action")
+	// 将动作转发给新的游戏状态处理
+	return gamingState.HandleAction(player, actionData)
 }
